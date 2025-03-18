@@ -70,10 +70,8 @@ async def main():
             if end_idx != -1:
                 # Search for https:// and get everything after it until the end
                 https_idx = content[start_idx:end_idx].find('https://')
-                print(https_idx)
                 if https_idx != -1:
                     cv_url = content[start_idx+https_idx:end_idx].strip()
-                    print(cv_url)
                 else:
                     cv_url = None
             else:
@@ -83,20 +81,26 @@ async def main():
         
         # Validate URL format
         if cv_url and cv_url.startswith('https://'):
-            print(f"CV URL: {cv_url}")
             try:
                 # Test the URL
                 response = requests.get(cv_url)
                 response.raise_for_status()  # Raise an exception for bad status codes
                 
-                # Check if it's a PDF or document
+                # Check if it's a PDF, document, or webpage
                 content_type = response.headers.get('content-type', '').lower()
                 if ('application/pdf' in content_type or 
                     'application/msword' in content_type or 
-                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document' in content_type):
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document' in content_type or
+                    'text/html' in content_type):
                     
                     # Save the file
-                    ext = '.pdf' if 'pdf' in content_type else '.docx'
+                    if 'text/html' in content_type:
+                        ext = '.html'
+                    elif 'pdf' in content_type:
+                        ext = '.pdf'
+                    else:
+                        ext = '.docx'
+                        
                     os.makedirs('downloaded_CVs', exist_ok=True)
                     output_file = os.path.join('downloaded_CVs', f"{name}{ext}")
                     
