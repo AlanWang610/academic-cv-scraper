@@ -256,29 +256,72 @@ def classify_with_openai(structured_entries):
             formatted_entry += f"Main line: {entry['raw_text']}\n"
         formatted_entries.append(formatted_entry)
     
+    json_structure = '''{
+        "education": {
+            "undergraduate": [
+                {
+                    "institution": "University Name",
+                    "graduation_year": "YYYY"
+                }
+            ],
+            "masters": [
+                {
+                    "institution": "University Name",
+                    "graduation_year": "YYYY"
+                }
+            ],
+            "phd": [
+                {
+                    "institution": "University Name",
+                    "graduation_year": "YYYY"
+                }
+            ]
+        },
+        "affiliations": [
+            {
+                "institution": "University Name",
+                "title": "one of: [Postdoctoral Researcher, Assistant Professor, Associate Professor, Professor]",
+                "official_title": "Full official title as written in CV",
+                "year_range": {
+                    "start": "YYYY",
+                    "end": "YYYY or present"
+                }
+            }
+        ]
+    }'''
+    
     prompt = f"""
-    Classify the following academic entries into education (undergrad, master's, PhD) 
-    and employment (postdoc, faculty, visiting) categories. Each entry shows an institution
-    and may include multiple positions or roles at that institution.
-
-    Entries:
+    Analyze these academic entries and organize them into a structured format.
+    
+    Input entries:
     {'\n'.join(formatted_entries)}
     
-    Please format the output as:
-    EDUCATION:
-    - Institution (Years): Degree/Program
+    Please output a JSON-like structure with these exact keys and hierarchy:
     
-    EMPLOYMENT:
-    - Institution:
-      * Role (Years)
-      * Role (Years)
+    {json_structure}
+    
+    Rules:
+    1. For education entries, extract the institution and graduation year
+    2. For affiliations (postdoc and faculty positions):
+       - Extract institution and year range
+       - Store the complete position title under "official_title"
+       - For "title", choose the most appropriate from these options ONLY:
+         * "Postdoctoral Researcher" - for postdoc positions
+         * "Assistant Professor" - for assistant professor roles
+         * "Associate Professor" - for associate professor roles
+         * "Professor" - for full professor roles
+    3. Use "present" for current positions
+    4. If any field is uncertain, use null
+    5. Keep the exact order of entries as they appear in the text
+    6. Include all positions for each institution
+    7. For visiting positions, use the appropriate title (e.g., "Professor" for Visiting Professor)
     """
     
     client = openai.OpenAI()
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You are an AI that classifies academic CV data."},
+            {"role": "system", "content": "You are an AI that structures academic CV data into a consistent format."},
             {"role": "user", "content": prompt}
         ]
     )
