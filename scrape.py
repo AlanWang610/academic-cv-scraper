@@ -65,9 +65,6 @@ async def scrape_single_cv(name):
     if result.history[-1]:
         # Get the content from the last history item
         content = str(result.history[-1])
-        # Save raw content for debugging
-        with open('test.txt', 'w') as f:
-            f.write(content)
         # Extract URL from the content by finding text between the delimiters
         start_delimiter = "result=[ActionResult(is_done=True, success=True, extracted_content="
         end_delimiter = ", error=None, include_in_memory=False)]"
