@@ -5,23 +5,13 @@ import spacy
 import os
 import dotenv
 import sys
+import json
 
 pdf_path = sys.argv[1]
 
 dotenv.load_dotenv()
 # Load NLP model (you can use 'en_core_web_sm' for a lighter model)
 nlp = spacy.load("en_core_web_md")
-
-# Predefined mapping for specific aliases (e.g., business school to university)
-UNIVERSITY_ALIAS_MAP = {
-    "MIT Sloan": "Massachusetts Institute of Technology",
-    "Harvard Business School": "Harvard University",
-    "Stanford GSB": "Stanford University",
-    # Add more specific aliases as needed
-}
-
-# Set of possible university names (to be added later)
-KNOWN_UNIVERSITIES_SET = set()
 
 # OpenAI API key (set your environment variable or replace directly)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -180,132 +170,6 @@ def filter_relevant_sections(structured_text):
     
     return "\n\n".join(formatted_sections)
 
-def extract_affiliations(text, structured_text):
-    """Extract structured entries with affiliations, years, and roles, considering indentation."""
-    structured_entries = []
-    
-    # Define section headers to skip
-    section_headers = {
-        "education", "academic positions", "academicpositions",
-        "academic appointments", "academicappointments",
-        "professional experience", "professionalexperience",
-        "work experience", "workexperience"
-    }
-    
-    def clean_text(text):
-        """Add spaces before capital letters to help with parsing"""
-        text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
-        text = re.sub(r'(\d)([A-Z])', r'\1 \2', text)
-        return text
-    
-    def extract_education_info(line):
-        """Special handler for education entries"""
-        # Clean up the text first
-        line = clean_text(line)
-        
-        # Try to match common education patterns
-        education_pattern = r'(\d{4})\s*([A-Za-z.]+|Diploma)\s*[.,]?\s*(?:\((.*?)\))?\s*([^,]+)?\s*,\s*([^,]+)(?:,\s*(.+))?'
-        match = re.match(education_pattern, line)
-        
-        if match:
-            year = match.group(1)
-            degree = match.group(2)
-            honors = match.group(3)  # e.g., "Summa Cum Laude"
-            field = match.group(4)   # e.g., "Financial Economics"
-            institution = match.group(5)  # e.g., "MIT Sloan School of Management"
-            location = match.group(6)     # e.g., "Massachusetts"
-            
-            # Process the line with spaCy for backup institution detection
-            doc = nlp(line)
-            spacy_institutions = [ent.text for ent in doc.ents if ent.label_ in ["ORG", "GPE"]]
-            
-            # Use the longest matching institution name
-            if spacy_institutions:
-                institution = max(spacy_institutions, key=len)
-            
-            return {
-                'year': year,
-                'degree': degree,
-                'institution': institution,
-                'field': field,
-                'honors': honors,
-                'raw_text': line.strip()
-            }
-        return None
-    
-    def extract_position_info(line, institutions=None):
-        """Helper function to extract position information from a line"""
-        years = re.findall(r'\b(19\d{2}|20\d{2})\b', line)
-        position = {
-            'text': line.strip(),
-            'years': years,
-            'role': None
-        }
-        
-        # Try to extract role
-        text_parts = line.split(',')
-        for part in text_parts:
-            if not any(year in part for year in years):
-                potential_role = part.strip()
-                if potential_role and (not institutions or not any(inst in potential_role for inst in institutions)):
-                    position['role'] = potential_role
-                    break
-        
-        return position
-    
-    # Split text into lines and process each line
-    lines = text.split('\n')
-    current_section = None
-    current_entry = None
-    
-    for line in lines:
-        if not line.strip():
-            continue
-        
-        # Check if this is a section header
-        clean_line = line.replace(" ", "").lower()
-        if clean_line in section_headers:
-            current_section = clean_line
-            continue
-        
-        # Handle education entries differently
-        if current_section == "education":
-            edu_info = extract_education_info(line)
-            if edu_info:
-                structured_entries.append({
-                    'institution': edu_info['institution'],
-                    'education_info': edu_info,
-                    'raw_text': line.strip()
-                })
-            continue
-        
-        # Process regular position entries
-        doc = nlp(clean_text(line))
-        institutions = [ent.text for ent in doc.ents if ent.label_ in ["ORG", "GPE"]]
-        years = re.findall(r'\b(19\d{2}|20\d{2})\b', line)
-        
-        # Rest of the existing position handling code...
-        if years:
-            if institutions:
-                if not current_entry or institutions[0] != current_entry['institution']:
-                    if current_entry:
-                        structured_entries.append(current_entry)
-                    current_entry = {
-                        'institution': institutions[0],
-                        'positions': [],
-                        'raw_text': line.strip()
-                    }
-            
-            if current_entry:
-                position = extract_position_info(line, institutions)
-                current_entry['positions'].append(position)
-    
-    # Don't forget the last entry
-    if current_entry:
-        structured_entries.append(current_entry)
-    
-    return structured_entries
-
 def classify_with_openai(filtered_text):
     """Use GPT-4 to classify education and employment details with preserved structure."""
     
@@ -391,15 +255,27 @@ def classify_with_openai(filtered_text):
 def process_cv(pdf_path):
     """Main pipeline for processing a CV PDF."""
     structured_text = extract_text_from_pdf(pdf_path)
-    
-    # First just analyze the sections
     filtered_text = filter_relevant_sections(structured_text)
-    print(filtered_text)
-    
-    # Ask user if they want to continue with the full processing
-    input("\nPress Enter to continue with full processing...")
-    
     classified_data = classify_with_openai(filtered_text)
+    
+    # Clean up the response and parse JSON properly
+    try:
+        # Remove any markdown formatting if present
+        if classified_data.startswith('```'):
+            classified_data = classified_data.split('\n', 2)[2]  # Skip first two lines
+        if classified_data.endswith('```'):
+            classified_data = classified_data[:-3]  # Remove ending backticks
+            
+        # Parse the JSON string into a dictionary
+        classified_data = json.loads(classified_data)
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON response: {e}")
+        print("Raw response:", classified_data)
+        return None
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        return None
+    
     return classified_data
 
 # Example usage
