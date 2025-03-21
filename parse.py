@@ -4,6 +4,9 @@ import openai
 import spacy
 import os
 import dotenv
+import sys
+
+pdf_path = sys.argv[1]
 
 dotenv.load_dotenv()
 # Load NLP model (you can use 'en_core_web_sm' for a lighter model)
@@ -80,9 +83,18 @@ def filter_relevant_sections(structured_text):
     sections = []
     # Define exact section headers we want to match (case-insensitive)
     target_keywords = {
-        "education", "employment", "academic positions", 
-        "academic appointments", "professional experience",
-        "degrees", "work experience"
+        "education",
+        "employment",
+        "academic positions",
+        "academic appointments",
+        "professional experience", 
+        "degrees",
+        "work experience",
+        # Versions without spaces
+        "academicpositions",
+        "academicappointments", 
+        "professionalexperience",
+        "workexperience"
     }
     
     # First pass: analyze font sizes and find headers
@@ -100,7 +112,9 @@ def filter_relevant_sections(structured_text):
     section_header_formats = []
     for line in structured_text:
         text = line['text'].strip()
-        if text.lower() in target_keywords:
+        # Remove spaces for comparison since some PDFs might not have spaces
+        text_no_spaces = text.replace(" ", "").lower()
+        if text_no_spaces in target_keywords:
             section_header_formats.append({
                 'size': line['size'],
                 'is_bold': line['is_bold'],
@@ -170,72 +184,121 @@ def extract_affiliations(text, structured_text):
     """Extract structured entries with affiliations, years, and roles, considering indentation."""
     structured_entries = []
     
+    # Define section headers to skip
+    section_headers = {
+        "education", "academic positions", "academicpositions",
+        "academic appointments", "academicappointments",
+        "professional experience", "professionalexperience",
+        "work experience", "workexperience"
+    }
+    
+    def clean_text(text):
+        """Add spaces before capital letters to help with parsing"""
+        text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
+        text = re.sub(r'(\d)([A-Z])', r'\1 \2', text)
+        return text
+    
+    def extract_education_info(line):
+        """Special handler for education entries"""
+        # Clean up the text first
+        line = clean_text(line)
+        
+        # Try to match common education patterns
+        education_pattern = r'(\d{4})\s*([A-Za-z.]+|Diploma)\s*[.,]?\s*(?:\((.*?)\))?\s*([^,]+)?\s*,\s*([^,]+)(?:,\s*(.+))?'
+        match = re.match(education_pattern, line)
+        
+        if match:
+            year = match.group(1)
+            degree = match.group(2)
+            honors = match.group(3)  # e.g., "Summa Cum Laude"
+            field = match.group(4)   # e.g., "Financial Economics"
+            institution = match.group(5)  # e.g., "MIT Sloan School of Management"
+            location = match.group(6)     # e.g., "Massachusetts"
+            
+            # Process the line with spaCy for backup institution detection
+            doc = nlp(line)
+            spacy_institutions = [ent.text for ent in doc.ents if ent.label_ in ["ORG", "GPE"]]
+            
+            # Use the longest matching institution name
+            if spacy_institutions:
+                institution = max(spacy_institutions, key=len)
+            
+            return {
+                'year': year,
+                'degree': degree,
+                'institution': institution,
+                'field': field,
+                'honors': honors,
+                'raw_text': line.strip()
+            }
+        return None
+    
+    def extract_position_info(line, institutions=None):
+        """Helper function to extract position information from a line"""
+        years = re.findall(r'\b(19\d{2}|20\d{2})\b', line)
+        position = {
+            'text': line.strip(),
+            'years': years,
+            'role': None
+        }
+        
+        # Try to extract role
+        text_parts = line.split(',')
+        for part in text_parts:
+            if not any(year in part for year in years):
+                potential_role = part.strip()
+                if potential_role and (not institutions or not any(inst in potential_role for inst in institutions)):
+                    position['role'] = potential_role
+                    break
+        
+        return position
+    
     # Split text into lines and process each line
     lines = text.split('\n')
-    current_institution = None
+    current_section = None
     current_entry = None
-    base_x = None  # Track the leftmost x-position
     
     for line in lines:
         if not line.strip():
             continue
         
-        # Find the line in structured_text to get its x-position
-        matching_lines = [l for l in structured_text if l['text'].strip() == line.strip()]
-        if not matching_lines:
+        # Check if this is a section header
+        clean_line = line.replace(" ", "").lower()
+        if clean_line in section_headers:
+            current_section = clean_line
             continue
-            
-        line_info = matching_lines[0]
-        x_pos = line_info['x0']
         
-        # Initialize base_x with the first line's position if not set
-        if base_x is None:
-            base_x = x_pos
+        # Handle education entries differently
+        if current_section == "education":
+            edu_info = extract_education_info(line)
+            if edu_info:
+                structured_entries.append({
+                    'institution': edu_info['institution'],
+                    'education_info': edu_info,
+                    'raw_text': line.strip()
+                })
+            continue
         
-        # Determine if this is an indented line
-        is_indented = x_pos > base_x + 10  # Allow for some tolerance
-        
-        # Process the line with spaCy
-        doc = nlp(line)
-        
-        # Extract years
+        # Process regular position entries
+        doc = nlp(clean_text(line))
+        institutions = [ent.text for ent in doc.ents if ent.label_ in ["ORG", "GPE"]]
         years = re.findall(r'\b(19\d{2}|20\d{2})\b', line)
         
-        # If this is a non-indented line, treat it as a potential new institution
-        if not is_indented:
-            # Save previous entry if it exists
-            if current_entry:
-                structured_entries.append(current_entry)
-            
-            # Look for institution entities
-            institutions = [ent.text for ent in doc.ents if ent.label_ in ["ORG", "GPE"]]
-            
+        # Rest of the existing position handling code...
+        if years:
             if institutions:
-                current_institution = institutions[0]
-                current_entry = {
-                    'institution': current_institution,
-                    'positions': [],
-                    'raw_text': line.strip()
-                }
-        
-        # If this is an indented line and we have a current institution
-        elif current_entry is not None:
-            position = {
-                'text': line.strip(),
-                'years': years,
-                'role': None
-            }
+                if not current_entry or institutions[0] != current_entry['institution']:
+                    if current_entry:
+                        structured_entries.append(current_entry)
+                    current_entry = {
+                        'institution': institutions[0],
+                        'positions': [],
+                        'raw_text': line.strip()
+                    }
             
-            # Try to extract role
-            text_parts = line.split(',')
-            for part in text_parts:
-                if not any(year in part for year in years):
-                    potential_role = part.strip()
-                    if potential_role:
-                        position['role'] = potential_role
-                        break
-            
-            current_entry['positions'].append(position)
+            if current_entry:
+                position = extract_position_info(line, institutions)
+                current_entry['positions'].append(position)
     
     # Don't forget the last entry
     if current_entry:
@@ -243,18 +306,8 @@ def extract_affiliations(text, structured_text):
     
     return structured_entries
 
-def classify_with_openai(structured_entries):
+def classify_with_openai(filtered_text):
     """Use GPT-4 to classify education and employment details with preserved structure."""
-    formatted_entries = []
-    for entry in structured_entries:
-        formatted_entry = f"Institution: {entry['institution']}\n"
-        if entry['positions']:
-            formatted_entry += "Positions:\n"
-            for pos in entry['positions']:
-                formatted_entry += f"- {pos['text']}\n"
-        else:
-            formatted_entry += f"Main line: {entry['raw_text']}\n"
-        formatted_entries.append(formatted_entry)
     
     json_structure = '''{
         "education": {
@@ -263,18 +316,21 @@ def classify_with_openai(structured_entries):
                     "institution": "University Name",
                     "graduation_year": "YYYY"
                 }
+                // Can have multiple undergraduate degrees
             ],
             "masters": [
                 {
                     "institution": "University Name",
                     "graduation_year": "YYYY"
                 }
+                // Can have multiple masters degrees
             ],
             "phd": [
                 {
                     "institution": "University Name",
                     "graduation_year": "YYYY"
                 }
+                // Can have multiple PhDs
             ]
         },
         "affiliations": [
@@ -291,17 +347,21 @@ def classify_with_openai(structured_entries):
     }'''
     
     prompt = f"""
-    Analyze these academic entries and organize them into a structured format.
+    Analyze these sections from an academic CV and organize them into a structured format.
     
-    Input entries:
-    {'\n'.join(formatted_entries)}
+    Input text:
+    {filtered_text}
     
     Please output a JSON-like structure with these exact keys and hierarchy:
     
     {json_structure}
     
     Rules:
-    1. For education entries, extract the institution and graduation year
+    1. For education entries:
+       - Extract institution and graduation year
+       - Include ALL degrees - a person may have multiple degrees at each level
+       - If a graduation year isn't specified but a year range is given, use the end year
+       - Classify "Diploma" degrees as undergraduate degrees unless explicitly stated otherwise
     2. For affiliations (postdoc and faculty positions):
        - Extract institution and year range
        - Store the complete position title under "official_title"
@@ -334,25 +394,15 @@ def process_cv(pdf_path):
     
     # First just analyze the sections
     filtered_text = filter_relevant_sections(structured_text)
+    print(filtered_text)
     
     # Ask user if they want to continue with the full processing
     input("\nPress Enter to continue with full processing...")
     
-    # Extract structured entries instead of separate lists
-    structured_entries = extract_affiliations(filtered_text, structured_text)
-    
-    # Debug output to verify structure
-    print("\nStructured Entries:")
-    for entry in structured_entries:
-        print("-" * 50)
-        print(f"Raw text: {entry['raw_text']}")
-        print(f"Institutions: {entry['institution']}")
-        print(f"Positions: {entry['positions']}")
-    
-    classified_data = classify_with_openai(structured_entries)
+    classified_data = classify_with_openai(filtered_text)
     return classified_data
 
 # Example usage
-pdf_path = "downloaded_CVs/Antoinette Schoar.pdf"
+pdf_path = f"downloaded_CVs/{pdf_path}"
 result = process_cv(pdf_path)
 print(result)

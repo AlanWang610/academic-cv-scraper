@@ -24,16 +24,18 @@ task = f"""
   Then return that URL immediately without clicking or visiting the page.
 
 - If no direct PDF link is found:
-  - Check the first 3 search results containing "CV", "Curriculum Vitae", or "Resume"
+  - Check the first 5 search results containing "CV", "Curriculum Vitae", or "Resume"
   - Visit each website and look for CV links
   - Try the next result if CV isn't found on current site
-  - Stop after checking 3 websites
+  - Stop after checking 5 websites
 
 **Search Strategy:**
 1. First try: "{name} curriculum vitae filetype:pdf"
-2. If no match, try: "{name} cv site:.edu"
-3. If still no match, try regular search with "{name} curriculum vitae"
-
+2. Look for the first 5 search results containing "cv", "Curriculum Vitae", or "Resume"
+3. If no match, try: "{name} cv site:.edu"
+4. Look for the first 5 search results containing "cv", "Curriculum Vitae", or "Resume"
+5. If still no match, try regular search with "{name} curriculum vitae"
+6. Look for the first 5 search results containing "cv", "Curriculum Vitae", or "Resume"
 **Output:**
 Return only the direct URL to the CV file (must start with https://).
 If no CV is found, return null.
