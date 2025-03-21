@@ -15,205 +15,12 @@ nlp = spacy.load("en_core_web_md")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 def extract_text_from_pdf(pdf_path):
-    """Extract text and formatting from a PDF file."""
-    structured_text = []
-    
-    def is_bold_font(fontname):
-        """More accurate bold font detection"""
-        bold_indicators = {'bold', 'bd', 'b', 'heavy', 'black', 'demi'}
-        # Convert to lowercase and remove spaces for comparison
-        font_lower = fontname.lower().replace(' ', '')
-        # Check if any bold indicator is a substring, but be careful of words like "bold"
-        return any(f'-{ind}' in font_lower or 
-                  f'{ind}-' in font_lower or 
-                  font_lower.endswith(ind) 
-                  for ind in bold_indicators)
-    
+    """Extract raw text from a PDF file."""
+    text = ""
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            chars = page.chars
-            chars.sort(key=lambda c: (c['top'], c['x0']))
-            
-            current_line = []
-            current_y = None
-            current_size = None
-            current_font = None
-            current_fonts = []  # Track all fonts in the line
-            current_x = None
-            
-            for char in chars:
-                # Check if this is a new line based on y-position
-                if current_y is None or abs(char['top'] - current_y) > 3:
-                    if current_line:
-                        # More accurate bold detection using all fonts in the line
-                        is_bold = any(is_bold_font(font) for font in current_fonts)
-                        
-                        structured_text.append({
-                            'text': ''.join(current_line),
-                            'size': current_size,
-                            'top': current_y,
-                            'x0': current_x,
-                            'is_bold': is_bold,
-                            'font': current_font,
-                            'fonts': list(set(current_fonts))  # Store unique fonts
-                        })
-                    current_line = []
-                    current_fonts = []
-                    current_y = char['top']
-                    current_size = char['size']
-                    current_font = char['fontname']
-                    current_x = char['x0']
-                
-                current_line.append(char['text'])
-                current_fonts.append(char['fontname'])
-            
-            # Don't forget the last line
-            if current_line:
-                is_bold = any(is_bold_font(font) for font in current_fonts)
-                structured_text.append({
-                    'text': ''.join(current_line),
-                    'size': current_size,
-                    'top': current_y,
-                    'x0': current_x,
-                    'is_bold': is_bold,
-                    'font': current_font,
-                    'fonts': list(set(current_fonts))
-                })
-    
-    return structured_text
-
-def filter_relevant_sections(structured_text):
-    """Extract sections related to education and employment using hierarchical structure."""
-    
-    def get_line_characteristics(line):
-        """Get key characteristics of a line for hierarchy detection"""
-        # More sophisticated header detection
-        is_header_format = (
-            line['is_bold'] or
-            any('bold' in f.lower() for f in line['fonts']) or
-            (line['text'].strip().endswith(':') and len(line['text'].strip()) > 2) or
-            (line['text'].strip().isupper() and len(line['text'].strip()) > 3)
-        )
-        
-        return {
-            'size': line['size'],
-            'is_bold': line['is_bold'],
-            'font': line['font'],
-            'fonts': line['fonts'],
-            'x0': line['x0'],
-            'has_colon': line['text'].strip().endswith(':'),
-            'all_caps': line['text'].strip().isupper(),
-            'is_header_format': is_header_format
-        }
-    
-    def find_hierarchy_levels(structured_text):
-        """Identify distinct hierarchy levels in the document"""
-        header_formats = set()
-        
-        # First pass: collect potential header formats
-        for line in structured_text:
-            text = line['text'].strip()
-            if not text:
-                continue
-            
-            chars = get_line_characteristics(line)
-            
-            # Only consider lines that are likely headers
-            if chars['is_header_format']:
-                level_key = (
-                    chars['size'],
-                    chars['is_bold'],
-                    any('bold' in f.lower() for f in chars['fonts']),
-                    chars['x0'],
-                    chars['all_caps']
-                )
-                header_formats.add(level_key)
-        
-        # Sort formats by hierarchy level
-        sorted_formats = sorted(
-            header_formats,
-            key=lambda x: (-x[0], -int(x[1]), -int(x[2]), x[3])
-        )
-        
-        return sorted_formats
-    
-    def normalize_text(text):
-        """Normalize text by removing spaces and making lowercase"""
-        return text.lower().replace(" ", "")
-    
-    def is_target_section(text, level_idx, hierarchy_levels):
-        """Check if this section is one we want to extract"""
-        target_keywords = {
-            "education",
-            "employment",
-            "academic positions",
-            "academic appointments",
-            "professional experience",
-            "experience",
-            "academic degrees",
-            "degrees",
-            "work experience"
-        }
-        
-        text_lower = text.lower()
-        # Direct match or fuzzy match with target keywords
-        return any(keyword in text_lower for keyword in target_keywords)
-    
-    # Find hierarchy levels
-    hierarchy_levels = find_hierarchy_levels(structured_text)
-    print("\nDetected hierarchy levels:")
-    for i, level in enumerate(hierarchy_levels):
-        print(f"Level {i}: size={level[0]}, bold={level[1]}, bold_font={level[2]}, indent={level[3]}, caps={level[4]}")
-    
-    # Process text using hierarchy
-    sections = []
-    current_section = None
-    current_level = None
-    
-    for line in structured_text:
-        text = line['text'].strip()
-        if not text:
-            continue
-        
-        chars = get_line_characteristics(line)
-        level_key = (chars['size'], chars['is_bold'], 
-                    any('bold' in f.lower() for f in chars['fonts']),
-                    chars['x0'], chars['all_caps'])
-        
-        # Check if this line is a header
-        if level_key in hierarchy_levels:
-            level_idx = hierarchy_levels.index(level_key)
-            print(f"\nFound potential header: '{text}'")
-            print(f"Level {level_idx}: {chars}")
-            
-            # If this is a header at same or higher level, end current section
-            if current_section and level_idx <= current_level:
-                sections.append(current_section)
-                current_section = None
-                current_level = None
-            
-            # Check if this is a target section
-            if is_target_section(text, level_idx, hierarchy_levels):
-                print("-> Matched target section")
-                current_section = {'header': text, 'content': []}
-                current_level = level_idx
-            
-        # Add content to current section if we're in one
-        elif current_section:
-            current_section['content'].append(text)
-    
-    # Add final section
-    if current_section:
-        sections.append(current_section)
-    
-    # Combine sections into formatted text
-    formatted_text = ""
-    for section in sections:
-        formatted_text += f"\n{section['header']}\n"
-        formatted_text += "\n".join(section['content'])
-        formatted_text += "\n"
-    
-    return formatted_text.strip()
+            text += page.extract_text() + "\n"
+    return text
 
 def classify_with_openai(filtered_text):
     """Use GPT-4 to classify education and employment details with preserved structure."""
@@ -296,20 +103,16 @@ def process_cv(pdf_path):
     """Main pipeline for processing a CV PDF."""
     print(f"\nProcessing: {pdf_path}")
     
-    structured_text = extract_text_from_pdf(pdf_path)
-    filtered_text = filter_relevant_sections(structured_text)
+    # Extract raw text
+    raw_text = extract_text_from_pdf(pdf_path)
     
-    print("\nFiltered Text:")
-    print("-------------")
-    print(filtered_text)
-    print("-------------\n")
-    
-    if not filtered_text.strip():
-        print("Warning: No relevant sections found in CV")
+    if not raw_text.strip():
+        print("Warning: No text found in PDF")
         return None
         
     try:
-        classified_data = classify_with_openai(filtered_text)
+        # Pass directly to OpenAI
+        classified_data = classify_with_openai(raw_text)
         
         # Ensure we have a proper JSON string
         if not classified_data.startswith('{'):
