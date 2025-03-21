@@ -173,53 +173,47 @@ def filter_relevant_sections(structured_text):
 def classify_with_openai(filtered_text):
     """Use GPT-4 to classify education and employment details with preserved structure."""
     
-    json_structure = '''{
-        "education": {
-            "undergraduate": [
-                {
-                    "institution": "University Name",
-                    "graduation_year": "YYYY"
-                }
-                // Can have multiple undergraduate degrees
-            ],
-            "masters": [
-                {
-                    "institution": "University Name",
-                    "graduation_year": "YYYY"
-                }
-                // Can have multiple masters degrees
-            ],
-            "phd": [
-                {
-                    "institution": "University Name",
-                    "graduation_year": "YYYY"
-                }
-                // Can have multiple PhDs
-            ]
-        },
-        "affiliations": [
-            {
-                "institution": "University Name",
-                "title": "one of: [Postdoctoral Researcher, Assistant Professor, Associate Professor, Professor]",
-                "official_title": "Full official title as written in CV",
-                "year_range": {
-                    "start": "YYYY",
-                    "end": "YYYY or present"
-                }
-            }
-        ]
-    }'''
-    
     prompt = f"""
     Analyze these sections from an academic CV and organize them into a structured format.
     
     Input text:
     {filtered_text}
     
-    Please output a JSON-like structure with these exact keys and hierarchy:
-    
-    {json_structure}
-    
+    Output a valid JSON object with this exact structure:
+    {{
+        "education": {{
+            "undergraduate": [
+                {{
+                    "institution": "University Name",
+                    "graduation_year": "YYYY"
+                }}
+            ],
+            "masters": [
+                {{
+                    "institution": "University Name",
+                    "graduation_year": "YYYY"
+                }}
+            ],
+            "phd": [
+                {{
+                    "institution": "University Name",
+                    "graduation_year": "YYYY"
+                }}
+            ]
+        }},
+        "affiliations": [
+            {{
+                "institution": "University Name",
+                "title": "one of: [Postdoctoral Researcher, Assistant Professor, Associate Professor, Professor]",
+                "official_title": "Full official title as written in CV",
+                "year_range": {{
+                    "start": "YYYY",
+                    "end": "YYYY or present"
+                }}
+            }}
+        ]
+    }}
+
     Rules:
     1. For education entries:
        - Extract institution and graduation year
@@ -239,13 +233,14 @@ def classify_with_openai(filtered_text):
     5. Keep the exact order of entries as they appear in the text
     6. Include all positions for each institution
     7. For visiting positions, use the appropriate title (e.g., "Professor" for Visiting Professor)
+    8. IMPORTANT: Ensure the output is a complete, valid JSON object starting with {{ and ending with }}
     """
     
     client = openai.OpenAI()
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You are an AI that structures academic CV data into a consistent format."},
+            {"role": "system", "content": "You are an AI that structures academic CV data into a consistent JSON format. Always output complete, valid JSON objects."},
             {"role": "user", "content": prompt}
         ]
     )
