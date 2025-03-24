@@ -195,5 +195,4 @@ def main():
     process_folder(folder_path)
 
 if __name__ == "__main__":
-    print(process_cv("downloaded_CVs/Tong Liu.pdf"))
-    # main()
+    main()
