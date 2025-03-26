@@ -17,23 +17,26 @@ async def scrape_single_cv(name):
 
     **Objective:**
     - Search for {name}'s academic CV, which is usually a PDF file.
-    - IMPORTANT: Return URL immediately if either:
-      1. Any search result has ALL of these characteristics:
+    - IMPORTANT: When finding a potential CV, perform these steps:
+      1. First verify if it's a CV by checking for these characteristics:
          - URL/title contains "cv", "curriculum-vitae", or "resume"
          - URL ends in .pdf
          - From a university domain (.edu or .ac.uk) or professional website
-      2. OR if you find a document that contains typical CV sections like:
+         OR contains typical CV sections like:
          - "Education", "Academic Positions", "Academic Appointments"
          - "Employment", "Research", "Publications"
          - "Teaching", "Professional Experience", "Honors"
-         Return that URL immediately without further searching.
 
-    - If no direct match found:
-      - Check first 5 search results containing "CV", "Curriculum Vitae", or "Resume"
-      - Visit each website and look for CV-like documents
-      - Stop and return URL immediately if you find a document with CV sections
-      - Try next result if current site doesn't have CV
-      - Stop after checking 5 websites
+      2. Then check if it's a finance/economics related CV by looking for:
+         - PhD in Finance, Economics, Economic History, or Economic Law
+         - Appointments/positions in Finance/Economics departments
+         - Research interests or publications in finance/economics
+         
+      3. If the CV is NOT finance/economics related:
+         - Perform a new search with: "{name} finance curriculum vitae filetype:pdf"
+         - Check another 5 results using the same verification process
+         - If a finance-related CV for someone with the same name is found, use that instead
+         - If no better match is found, return to the original CV URL
 
     **Search Strategy:**
     1. First try: "{name} curriculum vitae filetype:pdf"
@@ -41,23 +44,22 @@ async def scrape_single_cv(name):
     3. If no match, try: "{name} cv site:.edu"
     4. Look for first 5 results containing "cv" or typical CV sections
     5. If still no match, try: "{name} curriculum vitae"
+    6. For any found CV, verify finance/economics relevance
+    7. If not relevant, try: "{name} finance curriculum vitae filetype:pdf"
 
-    **Output:**
-    Return only the direct URL to the CV file (must start with https://).
-    If no CV is found, return null.
-
-    Example good URLs to return immediately:
-    - https://university.edu/faculty/smith/cv.pdf
-    - https://department.edu/people/smith_curriculum_vitae.pdf
-    - https://school.edu/faculty/cv/smith_2023.pdf
+    **Output Format:**
+    Return ONLY in this exact format:
+    "The CV for {name} was found at https://example.com/cv.pdf"
+    If no CV is found, return:
+    "No CV found for {name}"
     """
+
     agent = Agent(
         task=task,
         llm=ChatOpenAI(
             model="gpt-4o-mini",
-            temperature=0.3
+            temperature=0.3,
         ),
-        ignore_images=True
     )
     result = await agent.run()
     
