@@ -9,6 +9,9 @@ import openai
 import dotenv
 import argparse
 import pickle
+from langchain_openai import ChatOpenAI
+from browser_use import Agent
+import asyncio
 
 # Load environment variables
 dotenv.load_dotenv()
@@ -38,8 +41,46 @@ def format_author_name(author):
     last = normalize_name_case(last)
     return f"{first} {last}"
 
-def search_for_author_first_name():
-    return
+async def search_for_author_first_name(author_names, doi, non_doi_json):
+    """Function to search for the full first name of a list of authors"""
+    if doi:
+        task = f"""
+        ### Prompt for finding author first names when only the first initials are given, DOI is provided
+
+        **Objective:**
+        - Use the direct DOI using the link: https://doi.org/{doi}
+        - Find the first names of all the authors of the paper
+
+        **Output Format:**
+        Return ONLY in this exact format:
+        "[author_name_1_first_name, author_name_1_last_name], [author_name_2_first_name, author_name_2_last_name], [author_name_3_first_name, author_name_3_last_name]" and so forth for all authors
+        If no author first names are found, return:
+        "No author first names found for {author_names}"
+        """
+    else:
+        task = f"""
+        ### Prompt for finding author first names when only the first initials are given
+
+        **Objective:**
+        - Use the details here to find the paper online: {non_doi_json}
+        - Find the first names of all the authors of the paper
+
+        **Output Format:**
+        Return ONLY in this exact format:
+        "[author_name_1_first_name, author_name_1_last_name], [author_name_2_first_name, author_name_2_last_name], [author_name_3_first_name, author_name_3_last_name]" and so forth for all authors
+        If no author first names are found, return:
+        "No author first names found for {author_names}"
+        """
+    agent = Agent(
+        task=task,
+        llm=ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0.3,
+        ),
+    )
+    result = await agent.run()
+    print(result)
+    return result
 
 class AuthorNameResolver:
     def __init__(self, jsonl_file, progress_file=None):
@@ -82,7 +123,7 @@ class AuthorNameResolver:
             pickle.dump(self.progress, f)
         print(f"Progress saved to {self.progress_file}")
     
-    def process_file(self, batch_size=10, delay=1):
+    async def process_file(self, batch_size=10, delay=1):
         """
         Process the JSONL file line by line, resolving initial-only first names
         
@@ -113,7 +154,7 @@ class AuthorNameResolver:
                 
                 try:
                     # Process the line and write the updated version to the output file
-                    updated_line = self._process_line(line, name_mappings, batch_size, delay)
+                    updated_line = await self._process_line(line, name_mappings, batch_size, delay)
                     f_out.write(updated_line + '\n')
                     
                     # Update progress
@@ -133,7 +174,7 @@ class AuthorNameResolver:
         print(f"Output written to {self.output_file}")
         return name_mappings
     
-    def _process_line(self, line, name_mappings, batch_size, delay):
+    async def _process_line(self, line, name_mappings, batch_size, delay):
         """
         Process a single line from the JSONL file
         
@@ -159,7 +200,7 @@ class AuthorNameResolver:
             # If we found any initial-only names, resolve them
             if initial_authors:
                 print(f"Found {len(initial_authors)} authors with initial-only first names in this line")
-                self._resolve_initial_names(initial_authors, name_mappings, batch_size, delay)
+                await self._resolve_initial_names(initial_authors, name_mappings, batch_size, delay)
                 
                 # Update the data with resolved names
                 if "authors" in data:
@@ -201,7 +242,7 @@ class AuthorNameResolver:
                         # Update the first name
                         author[0] = resolved_parts[0]
     
-    def _resolve_initial_names(self, initial_authors, name_mappings, batch_size, delay):
+    async def _resolve_initial_names(self, initial_authors, name_mappings, batch_size, delay):
         """Resolve initial-only first names to full names"""
         # Get the list of authors with initial-only first names
         authors_to_process = [author for author in initial_authors.keys() 
@@ -223,11 +264,26 @@ class AuthorNameResolver:
             for i, author in enumerate(batch):
                 print(f"  Processing {batch_start+i+1}/{len(authors_to_process)}: {author}")
                 
-                # Get the associated works for this author
-                works = initial_authors[author]
+                # Get the associated work for this author
+                work = next(iter(initial_authors[author]))
                 
-                # Search for the full name
-                full_name = search_for_author_first_name(author, works)
+                # Extract DOI if available, otherwise use work details as non-DOI JSON
+                doi = None
+                non_doi_json = None
+                
+                # Check if the work has a DOI
+                if isinstance(work, dict) and 'doi' in work:
+                    doi = work['doi']
+                else:
+                    # If no DOI found, use the complete work details as non-DOI JSON
+                    if isinstance(work, dict):
+                        non_doi_json = work
+                    else:
+                        # If work is just a title string, create a simple object with the title
+                        non_doi_json = {"title": work, "author": author}
+                
+                # Search for the full name - now with await
+                full_name = await search_for_author_first_name(author, doi, non_doi_json)
                 
                 # Store the mapping
                 name_mappings[author] = full_name
@@ -311,7 +367,9 @@ def main():
     if args.command == 'process':
         # Process JSONL file
         resolver = AuthorNameResolver(args.jsonl_file, args.progress)
-        name_mappings = resolver.process_file(args.batch_size, args.delay)
+        
+        # Run the async process_file method
+        name_mappings = asyncio.run(resolver.process_file(args.batch_size, args.delay))
         
         # Save name mappings to CSV
         output_file = args.output if args.output else Path(args.jsonl_file).with_suffix('.mappings.csv')
