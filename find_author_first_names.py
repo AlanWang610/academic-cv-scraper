@@ -38,70 +38,8 @@ def format_author_name(author):
     last = normalize_name_case(last)
     return f"{first} {last}"
 
-def search_for_author_first_name(author_name, associated_works):
-    """
-    Search for the full first name of an author using the OpenAI API
-    
-    Args:
-        author_name: The author name with initial (e.g., "A. Smith")
-        associated_works: List of works associated with this author
-    
-    Returns:
-        Full author name if found, or original name if not found
-    """
-    # Extract the initial and last name
-    parts = author_name.split()
-    if len(parts) < 2:
-        return author_name  # Can't process without at least two parts
-    
-    initial = parts[0].replace('.', '')  # Remove period if present
-    last_name = parts[-1]
-    
-    # Select up to 3 work titles to use in the search
-    work_titles = list(associated_works)[:3]
-    if not work_titles:
-        return author_name  # No work titles to search with
-    
-    # Create a prompt for the API
-    prompt = f"""
-    I need to find the full first name of an academic author who appears with just an initial.
-    
-    Author with initial: {author_name}
-    
-    Associated works:
-    {', '.join(f'"{title}"' for title in work_titles)}
-    
-    Please search for this author's full first name based on these works. Return ONLY the full name in the format "FirstName LastName" if you find it with high confidence.
-    
-    If you can't find the full name with high confidence, return exactly the original name: "{author_name}".
-    
-    Do not include any explanations or additional text, just return the name.
-    """
-    
-    try:
-        client = openai.OpenAI()
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a research assistant that helps find full names of academic authors. You have access to search the web to find information."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        
-        # Extract the full name from the response
-        full_name = response.choices[0].message.content.strip()
-        
-        # Validate the response - it should contain the last name
-        if last_name.lower() in full_name.lower() and full_name != author_name:
-            print(f"Found full name for {author_name}: {full_name}")
-            return full_name
-        else:
-            print(f"Could not find reliable full name for {author_name}")
-            return author_name
-            
-    except Exception as e:
-        print(f"Error searching for full name of {author_name}: {str(e)}")
-        return author_name
+def search_for_author_first_name():
+    return
 
 class AuthorNameResolver:
     def __init__(self, jsonl_file, progress_file=None):
