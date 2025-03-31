@@ -25,21 +25,22 @@ def is_initial_name(name):
     # Remove any periods and spaces
     cleaned = name.replace('.', '').replace(' ', '')
     
-    # Check if it's a single letter (like "J")
-    if len(cleaned) == 1:
+    # Check if it's a single letter (like "J") - must be capitalized
+    if len(cleaned) == 1 and cleaned.isupper():
         return True
     
-    # Check if it's initials with periods (like "J.E." or "J. E.")
-    if '.' in name:
+    # Check if it's two-letter initials (like "JE" or "J.E.") - must be capitalized
+    if len(cleaned) == 2 and cleaned.isupper():
+        return True
+    
+    # Check if it's initials with periods (like "J.E." or "J. E.") - first letter must be capitalized
+    if '.' in name and name[0].isupper():
         # Count the number of periods - if it's similar to the number of characters, it's likely initials
         period_count = name.count('.')
         letter_count = sum(1 for c in name if c.isalpha())
-        if period_count >= letter_count - 1:
+        # Cap to 2 letters with periods (like "J.E.")
+        if period_count >= letter_count - 1 and letter_count <= 2:
             return True
-    
-    # Check for 2-3 letter uppercase abbreviations (like "JE" or "JEB")
-    if 2 <= len(cleaned) <= 3 and cleaned.isupper():
-        return True
     
     return False
 
@@ -76,8 +77,13 @@ async def search_for_author_first_name(author_names, doi, non_doi_json):
         - Do not spend time visiting multiple pages if you already found the authors
 
         **Output Format:**
-        Return ONLY in this exact format:
-        "[author_name_1_first_name, author_name_1_last_name], [author_name_2_first_name, author_name_2_last_name], [author_name_3_first_name, author_name_3_last_name]" and so forth for all authors
+        You MUST return your answer EXACTLY in this format with square brackets and commas as shown:
+        "[first_name1, last_name1], [first_name2, last_name2], [first_name3, last_name3]"
+
+        For example:
+        "[John, Smith], [Mary, Jones], [Robert, Williams]"
+
+        DO NOT deviate from this format or add any additional text.
         If no author first names are found, return:
         "No author first names found for {author_names}"
         """
@@ -97,8 +103,13 @@ async def search_for_author_first_name(author_names, doi, non_doi_json):
         - It's better to return partial results than to spend too much time searching
 
         **Output Format:**
-        Return ONLY in this exact format:
-        "[author_name_1_first_name, author_name_1_last_name], [author_name_2_first_name, author_name_2_last_name], [author_name_3_first_name, author_name_3_last_name]" and so forth for all authors
+        You MUST return your answer EXACTLY in this format with square brackets and commas as shown:
+        "[first_name1, last_name1], [first_name2, last_name2], [first_name3, last_name3]"
+
+        For example:
+        "[John, Smith], [Mary, Jones], [Robert, Williams]"
+
+        DO NOT deviate from this format or add any additional text.
         If no author first names are found, return:
         "No author first names found for {author_names}"
         """
@@ -322,6 +333,9 @@ class AuthorNameResolver:
                 print("Skipping error line:", data.get("llm_parsing_error", data.get("error", "Unknown error")))
                 return line  # Return the original line without processing
             
+            # Store the current work for reference in other methods
+            self.current_work = data
+            
             # Track works with their associated authors who have initial-only first names
             works_with_initial_authors = {}
             
@@ -388,12 +402,24 @@ class AuthorNameResolver:
             return line  # Return the original line if we can't parse it
     
     def _collect_initial_authors(self, author_list):
-        """Collect authors with initial-only first names from an author list"""
+        """Collect authors with initial-only first names"""
         initial_authors = []
         for author in author_list:
-            name = format_author_name(author)
-            if name and is_initial_name(author[0]):
-                initial_authors.append(name)
+            if len(author) >= 2 and all(author[:2]):
+                first_name = author[0]
+                last_name = author[1]
+                
+                # Double-check that this is actually an initial
+                if is_initial_name(first_name):
+                    formatted_name = format_author_name(author)
+                    initial_authors.append(formatted_name)
+                    print(f"Identified initial first name: '{first_name}' in author '{formatted_name}'")
+                else:
+                    print(f"Skipping non-initial first name: '{first_name}' in author '{format_author_name(author)}'")
+        
+        if initial_authors:
+            print(f"Found {len(initial_authors)} authors with initial-only first names: {initial_authors}")
+        
         return initial_authors
     
     async def _resolve_works_with_initial_names(self, works_with_initial_authors, name_mappings, batch_size, delay):
@@ -442,18 +468,51 @@ class AuthorNameResolver:
                     name_pairs = self._parse_full_names_result(full_names_result)
                     print(f"Parsed name pairs: {name_pairs}")
                     
-                    # Match the results with our original authors
-                    for i, author in enumerate(authors_to_process):
-                        if i < len(name_pairs):
-                            first, last = name_pairs[i]
-                            # Create the full name
+                    # Extract last names from our original authors for matching
+                    original_authors_info = []
+                    for author in authors_to_process:
+                        parts = author.split()
+                        if len(parts) >= 2:
+                            first_name = parts[0]
+                            last_name = parts[-1]  # Take the last part as the last name
+                            original_authors_info.append((author, last_name))
+                    
+                    print("Original authors with last names:")
+                    for author, last_name in original_authors_info:
+                        print(f"  {author} (last name: {last_name})")
+                    
+                    # Match the results with our original authors based on last name
+                    matched_authors = set()
+                    for author, last_name in original_authors_info:
+                        best_match = None
+                        best_similarity = 0
+                        
+                        for i, (first, last) in enumerate(name_pairs):
+                            if i in matched_authors:
+                                continue  # Skip already matched names
+                            
+                            # Check if last names match
+                            if self._last_names_match(last_name, last):
+                                similarity = self._name_similarity(last_name, last)
+                                if similarity > best_similarity:
+                                    best_similarity = similarity
+                                    best_match = (i, first, last)
+                        
+                        if best_match:
+                            idx, first, last = best_match
+                            matched_authors.add(idx)
                             full_name = f"{first} {last}"
                             name_mappings[author] = full_name
-                            print(f"Mapped {author} -> {full_name}")
+                            print(f"Matched {author} -> {full_name} (similarity: {best_similarity:.2f})")
                         else:
-                            # If we don't have a match, keep the original
+                            # If no match found, keep the original
                             name_mappings[author] = author
-                            print(f"No match for {author}, keeping original")
+                            print(f"No match found for {author}, keeping original")
+                    
+                    # Also store the full result string with the work key for future reference
+                    work_key = f"WORK:{work.get('doi', work.get('title', 'unknown'))}"
+                    name_mappings[work_key] = full_names_result
+                    
                 except Exception as e:
                     print(f"Error parsing full names result: {e}")
                     # If parsing fails, keep the original names
@@ -528,22 +587,31 @@ class AuthorNameResolver:
                             print(f"Added name pair: ({first}, {last})")
             else:
                 print("No bracket format detected, trying alternative parsing")
-                # Try to handle other formats
-                # Split by commas and try to pair them
-                parts = [p.strip() for p in result.split(",")]
-                print(f"Split into {len(parts)} parts: {parts}")
-                for i in range(0, len(parts) - 1, 2):
-                    if i + 1 < len(parts):
-                        first = parts[i]
-                        last = parts[i+1]
-                        name_pairs.append((first, last))
-                        print(f"Added name pair: ({first}, {last})")
+                
+                # Check if this is a comma-separated list of full names
+                # This handles formats like "Susan Dynarski, C.J. Libassi, Katherine Michelmore, Stephanie Owen"
+                full_names = [name.strip() for name in result.split(',')]
+                print(f"Split into {len(full_names)} full names: {full_names}")
+                
+                for full_name in full_names:
+                    # Split each full name into first and last parts
+                    name_parts = full_name.split()
+                    if len(name_parts) >= 2:
+                        # First name is the first part, last name is everything else
+                        first_name = name_parts[0]
+                        last_name = ' '.join(name_parts[1:])
+                        name_pairs.append((first_name, last_name))
+                        print(f"Added name pair from full name: ({first_name}, {last_name})")
+                    elif len(name_parts) == 1:
+                        # If there's only one part, it's probably a last name
+                        print(f"Warning: Could not split '{full_name}' into first and last name")
+        
+            print(f"Final parsed name pairs: {name_pairs}")
+            return name_pairs
         except Exception as e:
             print(f"Error parsing name pairs: {e}")
             print(f"Original result: {result}")
-        
-        print(f"Final parsed name pairs: {name_pairs}")
-        return name_pairs
+            return []
     
     def _update_author_list(self, author_list, name_mappings):
         """Update author list with resolved names"""
@@ -558,49 +626,64 @@ class AuthorNameResolver:
         
         # If we have initial authors and resolved names
         if initial_authors:
-            # Get the resolved names for this work
-            work_name = format_author_name(author_list[0]) if author_list else None
-            if work_name in name_mappings:
-                # Parse the resolved names
-                resolved_name = name_mappings[work_name]
-                resolved_parts = resolved_name.split()
-                
-                # Check if we have at least one resolved name
-                if len(resolved_parts) >= 2:
-                    print(f"Found resolved name: {resolved_name}")
-                    
-                    # Get all the resolved names from the result
-                    resolved_names = self._parse_full_names_result(resolved_name)
-                    print(f"Parsed {len(resolved_names)} resolved names for {len(initial_authors)} initial authors")
-                    
-                    # Print all initial authors and their corresponding resolved names
-                    print("Initial authors:")
-                    for i, (idx, author) in enumerate(initial_authors):
+            # Try to get the work key first
+            work_key = None
+            if "doi" in self.current_work:
+                work_key = f"WORK:{self.current_work['doi']}"
+            elif "title" in self.current_work:
+                work_key = f"WORK:{self.current_work['title']}"
+            
+            # Check if we have the full result for this work
+            if work_key and work_key in name_mappings:
+                full_result = name_mappings[work_key]
+                print(f"Found full result for work: {full_result}")
+                resolved_names = self._parse_full_names_result(full_result)
+            else:
+                # Fall back to individual author mappings
+                resolved_names = []
+                for _, author in initial_authors:
+                    name = format_author_name(author)
+                    if name in name_mappings:
+                        # Get the resolved name
+                        resolved_name = name_mappings[name]
+                        # Parse it into first and last name
+                        parts = resolved_name.split()
+                        if len(parts) >= 2:
+                            first_name = parts[0]
+                            last_name = ' '.join(parts[1:])
+                            resolved_names.append((first_name, last_name))
+                            print(f"Using individual mapping for {name} -> {resolved_name}")
+            
+            print(f"Parsed {len(resolved_names)} resolved names for {len(initial_authors)} initial authors")
+            
+            # Print all initial authors and their corresponding resolved names
+            print("Initial authors:")
+            for i, (idx, author) in enumerate(initial_authors):
+                original_name = format_author_name(author)
+                print(f"  {i+1}. {original_name}")
+            
+            print("Resolved names:")
+            for i, name_pair in enumerate(resolved_names):
+                first, last = name_pair
+                print(f"  {i+1}. {first} {last}")
+            
+            # Only proceed if the number of resolved names matches the number of initial authors
+            if len(resolved_names) == len(initial_authors):
+                print("\nMapping authors:")
+                for i, (idx, author) in enumerate(initial_authors):
+                    if i < len(resolved_names):
+                        first, last = resolved_names[i]
                         original_name = format_author_name(author)
-                        print(f"  {i+1}. {original_name}")
-                    
-                    print("Resolved names:")
-                    for i, name_pair in enumerate(resolved_names):
-                        first, last = name_pair
-                        print(f"  {i+1}. {first} {last}")
-                    
-                    # Only proceed if the number of resolved names matches the number of initial authors
-                    if len(resolved_names) == len(initial_authors):
-                        print("\nMapping authors:")
-                        for i, (idx, author) in enumerate(initial_authors):
-                            if i < len(resolved_names):
-                                first, last = resolved_names[i]
-                                original_name = format_author_name(author)
-                                # Verify the last name matches approximately (to avoid mismatches)
-                                if self._last_names_match(author[1], last):
-                                    # Update the first name
-                                    author[0] = first
-                                    print(f"  {i+1}. {original_name} -> {first} {author[1]}")
-                                    updated = True
-                                else:
-                                    print(f"  {i+1}. WARNING: Last name mismatch - {author[1]} vs {last}. Not updating {original_name}")
-                    else:
-                        print(f"WARNING: Number of resolved names ({len(resolved_names)}) doesn't match number of initial authors ({len(initial_authors)}). Not updating.")
+                        # Verify the last name matches approximately (to avoid mismatches)
+                        if self._last_names_match(author[1], last):
+                            # Update the first name
+                            author[0] = first
+                            print(f"  {i+1}. {original_name} -> {first} {author[1]}")
+                            updated = True
+                        else:
+                            print(f"  {i+1}. WARNING: Last name mismatch - {author[1]} vs {last}. Not updating {original_name}")
+            else:
+                print(f"WARNING: Number of resolved names ({len(resolved_names)}) doesn't match number of initial authors ({len(initial_authors)}). Not updating.")
         
         return updated
 
@@ -629,6 +712,33 @@ class AuthorNameResolver:
             return True
         
         return False
+
+    def _name_similarity(self, name1, name2):
+        """Calculate similarity between two names (0-1 scale)"""
+        # Clean up the names
+        name1 = name1.lower().strip().rstrip(']')
+        name2 = name2.lower().strip().rstrip(']')
+        
+        # Check for exact match
+        if name1 == name2:
+            return 1.0
+        
+        # Check if one is contained in the other
+        if name1 in name2:
+            return len(name1) / len(name2)
+        if name2 in name1:
+            return len(name2) / len(name1)
+        
+        # Calculate character-by-character similarity
+        similarity = 0
+        for c1, c2 in zip(name1, name2):
+            if c1 == c2:
+                similarity += 1
+        
+        max_len = max(len(name1), len(name2))
+        if max_len > 0:
+            return similarity / max_len
+        return 0
 
 def save_name_mappings_to_csv(name_mappings, output_file):
     """Save the name mappings to a CSV file"""
