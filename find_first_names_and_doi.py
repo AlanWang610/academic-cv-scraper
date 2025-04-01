@@ -75,13 +75,16 @@ async def search_for_author_first_name(author_names, doi, non_doi_json):
         - If you encounter a paywall or captcha, immediately try a Google search instead
         - Be satisfied with the author information you find on the first accessible page
         - Do not spend time visiting multiple pages if you already found the authors
+        - Pay careful attention to multi-part names (e.g., "Pinelopi Koujianou Goldberg")
+        - For authors with multiple last names, include ALL parts of the last name
 
         **Output Format:**
         You MUST return your answer EXACTLY in this format with square brackets and commas as shown:
-        "[first_name1, last_name1], [first_name2, last_name2], [first_name3, last_name3]"
+        "[first_name1, full_last_name1], [first_name2, full_last_name2], [first_name3, full_last_name3]"
 
         For example:
         "[John, Smith], [Mary, Jones], [Robert, Williams]"
+        "[Pinelopi Koujianou, Goldberg], [Amit Kumar, Khandelwal], [Nina, Pavcnik], [Petia, Topalova]"
 
         DO NOT deviate from this format or add any additional text.
         If no author first names are found, return:
@@ -473,17 +476,20 @@ class AuthorNameResolver:
                     for author in authors_to_process:
                         parts = author.split()
                         if len(parts) >= 2:
+                            # For authors with initials like "P. K. Goldberg", the last name is the last part
                             first_name = parts[0]
                             last_name = parts[-1]  # Take the last part as the last name
-                            original_authors_info.append((author, last_name))
+                            
+                            # Also store the full author string for better matching
+                            original_authors_info.append((author, last_name, author))
                     
                     print("Original authors with last names:")
-                    for author, last_name in original_authors_info:
+                    for author, last_name, full_string in original_authors_info:
                         print(f"  {author} (last name: {last_name})")
                     
                     # Match the results with our original authors based on last name
                     matched_authors = set()
-                    for author, last_name in original_authors_info:
+                    for author, last_name, full_string in original_authors_info:
                         best_match = None
                         best_similarity = 0
                         
@@ -501,6 +507,24 @@ class AuthorNameResolver:
                         if best_match:
                             idx, first, last = best_match
                             matched_authors.add(idx)
+                            
+                            # For multi-part names, check if the first name contains initials that match
+                            # For example, if we have "P. K. Goldberg" and "Pinelopi Koujianou Goldberg"
+                            # Check if "P" matches "Pinelopi" and "K" matches "Koujianou"
+                            initials_parts = [p.strip('.') for p in full_string.split() if p.strip('.').isupper() and len(p.strip('.')) == 1]
+                            first_parts = first.split()
+                            
+                            # If we have multiple initials and multiple first name parts, verify they match
+                            if len(initials_parts) > 1 and len(first_parts) > 1:
+                                matches = True
+                                for i, initial in enumerate(initials_parts[:-1]):  # Skip the last part (last name)
+                                    if i < len(first_parts) and not first_parts[i].startswith(initial):
+                                        matches = False
+                                        break
+                                
+                                if not matches:
+                                    print(f"Warning: Initials {initials_parts} don't match first name parts {first_parts}")
+                            
                             full_name = f"{first} {last}"
                             name_mappings[author] = full_name
                             print(f"Matched {author} -> {full_name} (similarity: {best_similarity:.2f})")
